@@ -1,0 +1,264 @@
+# ═══════════════════════════════════════════════════════════════════════
+# deployment.yaml — Helm Template for Kubernetes Deployment
+#
+# This is a TEMPLATE, not a static YAML.
+# Helm renders it by substituting {{ ... }} expressions with values from values.yaml.
+# The rendered output is a pure Kubernetes Deployment YAML.
+#
+# WHY TEMPLATES INSTEAD OF STATIC YAML?
+#   Static YAML: you need separate files for dev/staging/prod.
+#   Templates: ONE file, multiple environments via different values.yaml files.
+#   helm install dev  ./helm --values values-dev.yaml
+#   helm install prod ./helm --values values-prod.yaml
+# ═══════════════════════════════════════════════════════════════════════
+
+# apiVersion: apps/v1 — the Kubernetes API group and version.
+# Deployment is in the "apps" group (not the core group).
+# Without apiVersion: Kubernetes doesn't know how to interpret this YAML.
+apiVersion: apps/v1
+
+# kind: Deployment — tells Kubernetes what TYPE of object to create.
+# A Deployment manages a ReplicaSet, which manages Pods.
+# Deployment → ReplicaSet → Pod(s)
+# Without kind: Kubernetes cannot process the manifest.
+kind: Deployment
+
+# metadata: information ABOUT the object (not the application itself)
+metadata:
+  # name: the Kubernetes object name. Must be unique within the namespace.
+  # {{ include "employee-service.fullname" . }} calls a Helm helper template
+  # defined in _helpers.tpl. It generates: "release-name-employee-service"
+  # Using the release name prefix prevents name collisions if you install
+  # the chart twice with different release names in the same namespace.
+  name: {{ include "employee-service.fullname" . }}
+
+  # namespace: which Kubernetes namespace this object belongs to.
+  # .Release.Namespace is set by helm install --namespace <name>
+  namespace: {{ .Release.Namespace }}
+
+  # labels: key-value pairs for organizing and selecting Kubernetes objects.
+  # These labels are applied to the Deployment OBJECT itself.
+  # Standard Kubernetes labels (app.kubernetes.io/*) are recommended by the
+  # Kubernetes documentation for consistent tooling support.
+  labels:
+    {{- include "employee-service.labels" . | nindent 4 }}
+    # {{- ... }} trims leading whitespace (the dash)
+    # nindent 4: indent the output by 4 spaces (required for YAML structure)
+
+spec:
+  # replicas: how many pod copies to run.
+  # {{ .Values.replicaCount }} reads from values.yaml: replicaCount: 2
+  # This is how Helm makes Kubernetes YAML parametric.
+  # Without Helm: you hardcode "2" here and need a separate file for prod ("3").
+  {{- if not .Values.autoscaling.enabled }}
+  # Only set replicas if autoscaling is disabled.
+  # When HPA (autoscaling) is enabled, HPA manages the replica count.
+  # Hardcoding replicas conflicts with HPA → they fight each other.
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+
+  # selector: tells the Deployment which Pods it "owns" and manages.
+  # The selector MUST match the pod template's labels (spec.template.metadata.labels).
+  # Immutable after creation — you cannot change the selector without recreating the Deployment.
+  selector:
+    matchLabels:
+      {{- include "employee-service.selectorLabels" . | nindent 6 }}
+
+  # strategy: how Kubernetes updates pods when the Deployment changes.
+  strategy:
+    # RollingUpdate: gradually replace old pods with new ones.
+    # Ensures zero downtime — traffic is always served during updates.
+    # Alternative: Recreate (kills ALL old pods before creating new ones = downtime).
+    type: RollingUpdate
+    rollingUpdate:
+      # maxUnavailable: 0 → no pod is taken down until a new one is fully ready.
+      # During update: pod count stays at (replicas) at all times.
+      # Zero downtime guarantee.
+      maxUnavailable: 0
+      # maxSurge: 1 → one extra pod is created during the update.
+      # At peak: replicas + 1 pods are running simultaneously.
+      # This requires extra capacity but ensures zero downtime.
+      maxSurge: 1
+
+  # template: the Pod template — defines what every Pod looks like.
+  # The Deployment creates Pods using this template.
+  template:
+    metadata:
+      labels:
+        {{- include "employee-service.selectorLabels" . | nindent 8 }}
+      annotations:
+        # This annotation forces a rolling update whenever configmap content changes.
+        # Without this: changing a ConfigMap does NOT restart pods.
+        # Pods keep running with OLD configuration until manually restarted.
+        # The checksum is a hash of the ConfigMap — changes when ConfigMap changes.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        # {{- with .Values.podAnnotations }} → only render if podAnnotations is defined
+        # toYaml: converts the Go map to YAML format
+        # nindent 8: indent 8 spaces
+
+    spec:
+      # imagePullSecrets: Kubernetes secret containing Docker registry credentials.
+      # Required for private GHCR images. The secret must be pre-created in the namespace.
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      serviceAccountName: {{ include "employee-service.serviceAccountName" . }}
+
+      # securityContext: pod-level security settings
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+
+      # terminationGracePeriodSeconds: how long Kubernetes waits for the pod to
+      # gracefully shutdown before sending SIGKILL.
+      # Default is 30 seconds. Our app uses server.shutdown=graceful (30s max).
+      # Set to 60 to give the app enough time for in-flight requests.
+      terminationGracePeriodSeconds: 60
+
+      containers:
+        - name: {{ .Chart.Name }}
+          # The full image reference with tag.
+          # .Values.image.repository = "ghcr.io/mycompany/employee-service"
+          # .Values.image.tag = "1.2.3" (updated by CI on every build)
+          # | default .Chart.AppVersion → fallback to Chart.yaml's appVersion if tag is empty
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+
+          # imagePullPolicy: when to pull the image from registry.
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+
+          # Container-level security context
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+
+          ports:
+            # containerPort: the port the CONTAINER listens on.
+            # Must match server.port in application.properties (8080).
+            # EXPOSE in Dockerfile is documentation; this is the actual configuration.
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            # Management port for Actuator endpoints (health probes, metrics)
+            - name: management
+              containerPort: 8081
+              protocol: TCP
+
+          # ─────────────────────────────────────────────────────────
+          # LIVENESS PROBE — "Is the app still alive?"
+          # Kubernetes calls this endpoint periodically.
+          # Three consecutive failures → container is killed and restarted.
+          # ─────────────────────────────────────────────────────────
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.liveness.path }}
+              port: {{ .Values.probes.liveness.port }}
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+
+          # ─────────────────────────────────────────────────────────
+          # READINESS PROBE — "Is the app ready for traffic?"
+          # Kubernetes removes the pod from the Service endpoint list
+          # when readiness fails. Traffic stops reaching this pod.
+          # ─────────────────────────────────────────────────────────
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readiness.path }}
+              port: {{ .Values.probes.readiness.port }}
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+
+          # ─────────────────────────────────────────────────────────
+          # STARTUP PROBE — "Has the app finished starting?"
+          # Prevents liveness probe from killing a slow-starting container.
+          # Active ONLY during startup. Once it succeeds once, liveness takes over.
+          # ─────────────────────────────────────────────────────────
+          startupProbe:
+            httpGet:
+              path: {{ .Values.probes.startup.path }}
+              port: {{ .Values.probes.startup.port }}
+            initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+
+          # RESOURCE REQUESTS AND LIMITS
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+
+          # ENVIRONMENT VARIABLES
+          env:
+            # Iterate over each env var defined in values.yaml
+            {{- range $name, $value := .Values.env }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+            {{- end }}
+
+            # Inject database URL from ConfigMap
+            - name: SPRING_DATASOURCE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "employee-service.fullname" . }}-config
+                  key: database-url
+
+            # Inject database username from ConfigMap
+            - name: SPRING_DATASOURCE_USERNAME
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "employee-service.fullname" . }}-config
+                  key: database-username
+
+            # Inject database password from Secret (encrypted at rest in etcd)
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "employee-service.fullname" . }}-secret
+                  key: database-password
+
+            # Expose pod name and namespace as env vars (for logging/debugging)
+            # fieldRef reads from the pod's metadata — no hardcoding.
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+
+          # VOLUME MOUNTS — where volumes appear inside the container
+          volumeMounts:
+            # /tmp must be writable — Java creates temp files here.
+            # readOnlyRootFilesystem: true blocks writing to / so we mount /tmp explicitly.
+            - name: tmp-dir
+              mountPath: /tmp
+
+      # VOLUMES — the actual volume definitions (mounted above)
+      volumes:
+        # emptyDir: a temporary directory that exists for the lifetime of the pod.
+        # It starts empty, and is shared between all containers in the pod.
+        # When the pod is deleted, emptyDir is deleted too.
+        # Used for: /tmp scratch space, inter-container communication.
+        - name: tmp-dir
+          emptyDir: {}
+
+      # NODE SELECTION
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

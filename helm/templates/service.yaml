@@ -1,0 +1,68 @@
+# ═══════════════════════════════════════════════════════════════════════
+# service.yaml — Kubernetes Service
+#
+# WHY DO PODS NEED A SERVICE?
+#   Pods are ephemeral. They die and restart with NEW IP addresses.
+#   If you hardcode a pod IP, it breaks when the pod restarts.
+#
+#   A Kubernetes Service is a STABLE network endpoint:
+#   - Permanent DNS name: employee-service.prod.svc.cluster.local
+#   - Permanent ClusterIP (virtual IP that never changes)
+#   - Automatically load balances across all healthy pods
+#   - Uses the pod LABELS (not IP) to find target pods
+#
+#   Service flow:
+#   Client → Service (ClusterIP:80) → kube-proxy → Pod 1 (10.0.0.5:8080)
+#                                                 → Pod 2 (10.0.0.6:8080)
+#
+# Kubernetes kube-proxy maintains iptables/IPVS rules that forward
+# traffic from the Service ClusterIP to the Pod IPs dynamically.
+# When a pod dies and a new one starts with a different IP,
+# kube-proxy updates the rules automatically.
+# ═══════════════════════════════════════════════════════════════════════
+
+apiVersion: v1    # Service is in the core API group (no "apps/")
+kind: Service
+
+metadata:
+  name: {{ include "employee-service.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "employee-service.labels" . | nindent 4 }}
+
+spec:
+  # type: ClusterIP — internal-only access (no external IP).
+  # The Service gets a virtual IP that only works inside the cluster.
+  # External access happens through the Ingress controller.
+  type: {{ .Values.service.type }}
+
+  # ports: maps Service port to container port.
+  ports:
+    - name: http
+      # port: the port clients connect to on the Service.
+      # kubectl exec curl employee-service:80 → reaches the service.
+      port: {{ .Values.service.port }}
+      # targetPort: the port on the POD to forward to.
+      # The pod (application) listens on 8080.
+      # Service listens on 80, forwards to 8080 on the pod.
+      # This decouples the public API port from the application port.
+      targetPort: {{ .Values.service.targetPort }}
+      # protocol: TCP for HTTP. UDP for DNS, game servers.
+      protocol: TCP
+    # Management port — for health checks and metrics
+    - name: management
+      port: 8081
+      targetPort: 8081
+      protocol: TCP
+
+  # selector: which pods receive traffic from this Service.
+  # The Service forwards traffic to pods that have ALL these labels.
+  # These labels MUST match the pod template labels in Deployment.
+  # If no pods match: Service exists but delivers traffic nowhere (502 errors).
+  selector:
+    {{- include "employee-service.selectorLabels" . | nindent 4 }}
+
+  # sessionAffinity: None = load balance requests across pods (default, round-robin).
+  # ClientIP = same client always reaches the same pod (sticky sessions).
+  # Stateless REST APIs should use None — any pod can serve any request.
+  sessionAffinity: None

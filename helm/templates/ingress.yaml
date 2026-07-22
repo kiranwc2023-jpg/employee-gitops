@@ -1,0 +1,94 @@
+# ═══════════════════════════════════════════════════════════════════════
+# ingress.yaml — Kubernetes Ingress
+#
+# TRAFFIC FLOW:
+#   Internet
+#     → DNS (employee.company.com → Load Balancer IP)
+#     → Cloud Load Balancer (AWS ALB / GCP GLB)
+#     → Kubernetes Node (NodePort)
+#     → nginx-ingress-controller Pod (reads Ingress rules)
+#     → employee-service Service (ClusterIP:80)
+#     → employee-service Pod (8080)
+#
+# WHY INGRESS INSTEAD OF SERVICE TYPE=LOADBALANCER?
+#   LoadBalancer: one cloud load balancer per Service = EXPENSIVE.
+#   Ingress: ONE load balancer serves ALL services via host/path routing.
+#
+#   Single Ingress controller can route:
+#     employee.company.com → employee-service
+#     orders.company.com   → order-service
+#     users.company.com    → user-service
+#   All through ONE external IP / load balancer.
+# ═══════════════════════════════════════════════════════════════════════
+
+{{- if .Values.ingress.enabled -}}
+# {{- if ... -}} = only render this YAML if ingress.enabled is true in values.yaml
+# The {{- and -}} trim whitespace around the if block.
+
+apiVersion: networking.k8s.io/v1    # Ingress is in the networking.k8s.io group
+kind: Ingress
+
+metadata:
+  name: {{ include "employee-service.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "employee-service.labels" . | nindent 4 }}
+  # Annotations: Ingress-controller-specific configuration.
+  # These are read by the nginx-ingress-controller pod, not by Kubernetes itself.
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
+spec:
+  # ingressClassName: which Ingress controller should process this Ingress.
+  # "nginx" = look for a controller registered with class "nginx".
+  # Without this: ambiguous if multiple controllers exist in the cluster.
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+
+  # tls: HTTPS/TLS configuration.
+  # The nginx controller reads this, obtains the TLS certificate from the Secret,
+  # and terminates SSL — your application receives plain HTTP.
+  # This is "TLS termination at the ingress" — the most common pattern.
+  {{- if .Values.ingress.tls }}
+  tls:
+    {{- range .Values.ingress.tls }}
+    # secretName: the Kubernetes Secret containing:
+    #   tls.crt = the TLS certificate (PEM format)
+    #   tls.key = the private key (PEM format)
+    # The Secret is created by cert-manager (automatic Let's Encrypt certs)
+    # or manually via: kubectl create secret tls employee-tls-secret \
+    #   --cert=tls.crt --key=tls.key
+    - hosts:
+        {{- range .hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      secretName: {{ .secretName }}
+    {{- end }}
+  {{- end }}
+
+  # rules: routing table — which host/path maps to which Service.
+  rules:
+    {{- range .Values.ingress.hosts }}
+    # {{- range .Values.ingress.hosts }} iterates over the hosts list in values.yaml
+    - host: {{ .host | quote }}   # employee.company.com
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}     # "/" matches all paths
+            # pathType: Prefix = match any path that STARTS with the given prefix.
+            # Exact: only match the exact path (no trailing slashes)
+            # ImplementationSpecific: Ingress controller decides
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                # The Service to route traffic to
+                name: {{ include "employee-service.fullname" $ }}
+                port:
+                  # number: the Service port (80, as defined in Service spec)
+                  number: {{ $.Values.service.port }}
+          {{- end }}
+    {{- end }}
+{{- end }}

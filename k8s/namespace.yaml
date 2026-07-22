@@ -1,0 +1,36 @@
+# ═══════════════════════════════════════════════════════════════════════
+# namespace.yaml — Kubernetes Namespace
+#
+# WHY NAMESPACES?
+#   Kubernetes namespaces are virtual clusters within a physical cluster.
+#   They provide isolation between:
+#     - Environments: dev, staging, prod (in same cluster)
+#     - Teams: team-a, team-b
+#     - Applications: employee-system, order-system
+#
+#   Benefits:
+#     RBAC: grant developers access to "employee-prod" but not "payment-prod"
+#     Resource Quotas: limit total CPU/memory per namespace (cost control)
+#     Network Policies: isolate network between namespaces
+#     Resource naming: same name can exist in different namespaces
+#
+#   Without namespaces: everything is in "default" — no isolation, no RBAC
+# ═══════════════════════════════════════════════════════════════════════
+
+apiVersion: v1
+kind: Namespace
+
+metadata:
+  name: employee-prod
+
+  # Labels on the namespace enable:
+  #   1. Network policies that target this namespace by label
+  #   2. Istio automatic sidecar injection (if using service mesh)
+  #   3. OPA/Gatekeeper policies applied per namespace
+  labels:
+    name: employee-prod
+    environment: production
+    team: platform-engineering
+    # istio-injection: enabled → Istio automatically injects the Envoy sidecar
+    # into every pod in this namespace (service mesh capabilities).
+    istio-injection: enabled

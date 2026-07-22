@@ -1,0 +1,231 @@
+# ═══════════════════════════════════════════════════════════════════════
+# argocd/application.yaml — Argo CD Application Definition
+#
+# ═══════════════ WHAT IS ARGO CD? ══════════════════════════════════════
+#
+# Argo CD is a GitOps controller that runs INSIDE Kubernetes.
+# It continuously monitors a Git repository and ensures that what is
+# in Git matches what is running in the Kubernetes cluster.
+#
+# Core concept: DESIRED STATE vs CURRENT STATE
+#
+#   Desired State = what is in the Git repository (values.yaml, k8s YAML)
+#   Current State = what is actually running in Kubernetes
+#
+#   If they differ → Argo CD calls this "OutOfSync" (drift detected).
+#   Argo CD can automatically sync: apply the Git state to the cluster.
+#
+# ════════════════ HOW ARGO CD MONITORS GIT ════════════════════════════
+#
+#   METHOD 1 — POLLING (default):
+#     Argo CD checks the configured Git repository every 3 minutes.
+#     It runs `git pull` and compares the latest commit SHA to the
+#     previously-synced SHA. If different: detects change.
+#     Pros: simple, always works.
+#     Cons: up to 3-minute delay between push and deploy.
+#
+#   METHOD 2 — WEBHOOKS (recommended for production):
+#     GitHub sends a POST request to Argo CD every time you push to the repo.
+#     Argo CD receives it instantly → checks for changes immediately.
+#     Setup: GitHub repo Settings → Webhooks → Add Webhook
+#       URL: https://argocd.company.com/api/webhook
+#       Content-Type: application/json
+#       Events: Just the push event
+#     Result: deployment begins within seconds of a git push.
+#
+# ════════════════ HOW RECONCILIATION WORKS ════════════════════════════
+#
+#   1. Argo CD fetches the Git repository (poll or webhook trigger).
+#   2. Argo CD renders the manifests (runs `helm template` if Helm chart).
+#   3. Argo CD queries Kubernetes API for the CURRENT state of all resources.
+#   4. Argo CD diffs desired vs current (like `git diff` but for K8s objects).
+#   5. If diff detected:
+#      - syncPolicy.automated: Argo CD applies changes automatically.
+#      - No automated sync: Argo CD shows "OutOfSync", waits for manual sync.
+#   6. Argo CD applies: kubectl apply -f <manifest> for each changed resource.
+#   7. Kubernetes creates/updates resources.
+#   8. Argo CD waits for resources to become healthy.
+#   9. Argo CD marks the application as "Synced + Healthy".
+#
+# ════════════════ SYNC STATUS ═════════════════════════════════════════
+#   Synced:    Current state matches Git. Everything is deployed correctly.
+#   OutOfSync: Drift detected. Something in K8s differs from Git.
+#              Causes: manual kubectl edit, Argo CD bug, external change.
+#   Unknown:   Argo CD cannot compare (usually permissions issue).
+#
+# ════════════════ HEALTH STATUS ═══════════════════════════════════════
+#   Healthy:   All resources are in the expected running state.
+#              Deployments: all replicas running. Services: endpoint exists.
+#   Progressing: Resources are being updated (rolling update in progress).
+#   Degraded:  A resource failed. Deployment: pods crash-looping.
+#   Missing:   Resource defined in Git but doesn't exist in K8s yet.
+#   Suspended: An operation was manually suspended.
+#
+# ════════════════ DRIFT DETECTION ════════════════════════════════════
+#   Drift = someone modified K8s directly (kubectl edit/apply) bypassing Git.
+#   Argo CD detects this and marks the app "OutOfSync".
+#   With selfHeal: true → Argo CD automatically reverts the drift.
+#   Without selfHeal → human must manually sync to restore the desired state.
+# ═══════════════════════════════════════════════════════════════════════
+
+# Argo CD Application is a Custom Resource Definition (CRD).
+# Argo CD installs this CRD when you deploy it.
+# apiVersion: argoproj.io/v1alpha1 → Argo CD's API group and version.
+apiVersion: argoproj.io/v1alpha1
+
+# kind: Application → tells Argo CD this is an application to manage.
+kind: Application
+
+metadata:
+  # name: the Argo CD Application name.
+  # Shown in the Argo CD dashboard. Used with argocd CLI:
+  #   argocd app sync employee-service-prod
+  name: employee-service-prod
+
+  # namespace: argocd → Argo CD watches its OWN namespace for Application objects.
+  # All Argo CD Application manifests MUST be in the 'argocd' namespace.
+  namespace: argocd
+
+  # finalizers: prevents the Application from being deleted until Argo CD
+  # has cleaned up all the Kubernetes resources it created.
+  # Without this: deleting the Application leaves orphaned pods/services running.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+
+  labels:
+    app.kubernetes.io/name: employee-service
+    environment: production
+
+spec:
+  # project: which Argo CD Project this Application belongs to.
+  # Projects provide:
+  #   - RBAC: restrict which repos, clusters, namespaces teams can deploy to
+  #   - Whitelisting: only approved source repos and destination clusters
+  # "default" is the built-in project with no restrictions.
+  # Production should use custom projects with fine-grained RBAC.
+  project: default
+
+  # ─────────────────────────────────────────────────────────────────
+  # SOURCE — where Argo CD reads the desired state from
+  # ─────────────────────────────────────────────────────────────────
+  source:
+    # repoURL: the Git repository URL Argo CD monitors.
+    # This is the employee-gitops repository — NOT the application source code.
+    # GitOps principle: the deployment repo is separate from the app repo.
+    # Why separate repos?
+    #   Security: developers can push app code without deployment permissions.
+    #   History: deployment history is clean and searchable (no app code noise).
+    #   Permissions: different teams own different repos (operators own gitops).
+    repoURL: https://github.com/mycompany/employee-gitops
+
+    # targetRevision: which branch/tag/commit to deploy from.
+    # HEAD = the latest commit on the default branch.
+    # Production best practice: pin to a specific branch (e.g., "main")
+    # or a specific git tag (e.g., "v1.2.3") rather than HEAD.
+    # With HEAD: any push to the branch triggers a sync.
+    targetRevision: HEAD
+
+    # path: the directory within the repo to look at.
+    # Argo CD renders ONLY the files in this path.
+    # Use "helm" for Helm chart deployment:
+    path: helm
+
+    # helm: configuration specific to Helm chart deployment.
+    helm:
+      # valueFiles: additional values files to merge on top of values.yaml.
+      # Override precedence (last wins): values.yaml → values-prod.yaml
+      valueFiles:
+        - values.yaml
+        - values-prod.yaml    # production overrides (more replicas, production DB URL)
+
+      # releaseName: the Helm release name.
+      # This becomes the prefix in all Kubernetes object names.
+      releaseName: employee-service
+
+  # ─────────────────────────────────────────────────────────────────
+  # DESTINATION — where Argo CD deploys to
+  # ─────────────────────────────────────────────────────────────────
+  destination:
+    # server: which Kubernetes cluster to deploy to.
+    # https://kubernetes.default.svc = the SAME cluster Argo CD runs in (in-cluster).
+    # For external clusters: https://api.mycluster.example.com:6443
+    server: https://kubernetes.default.svc
+
+    # namespace: the Kubernetes namespace to deploy into.
+    # The namespace must exist before Argo CD can deploy.
+    # (Or set syncOptions: CreateNamespace=true to auto-create it)
+    namespace: employee-prod
+
+  # ─────────────────────────────────────────────────────────────────
+  # SYNC POLICY — how Argo CD handles synchronization
+  # ─────────────────────────────────────────────────────────────────
+  syncPolicy:
+    # automated: Argo CD syncs automatically when it detects drift.
+    # Without this: Argo CD shows OutOfSync but waits for human to click "Sync".
+    automated:
+      # prune: true → delete Kubernetes resources that exist in the cluster
+      # but are NO LONGER in Git.
+      # Example: you remove a ConfigMap from the repo → Argo CD deletes it.
+      # prune: false → orphaned resources stay (safe default for new teams).
+      prune: true
+
+      # selfHeal: true → when SOMEONE MANUALLY changes Kubernetes (kubectl edit),
+      # Argo CD automatically REVERTS the change back to the Git state.
+      # This enforces Git as the single source of truth.
+      # Without selfHeal: manual changes persist until the next git push.
+      selfHeal: true
+
+      # allowEmpty: false → don't sync if the rendered manifests are empty.
+      # Prevents accidentally deleting everything if a bug produces an empty render.
+      allowEmpty: false
+
+    syncOptions:
+      # CreateNamespace=true → automatically create the target namespace if it doesn't exist.
+      # Without this: deployment fails if the namespace doesn't exist yet.
+      - CreateNamespace=true
+
+      # PrunePropagationPolicy=foreground → when deleting resources,
+      # wait for all dependents (owned objects) to be deleted first.
+      # Foreground deletion: Pod is deleted BEFORE the ReplicaSet is deleted.
+      # Background deletion: owner is deleted immediately, dependents deleted asynchronously.
+      - PrunePropagationPolicy=foreground
+
+      # ServerSideApply=true → use Kubernetes Server-Side Apply instead of client-side apply.
+      # Server-Side Apply provides better conflict detection and field management.
+      # Recommended for production.
+      - ServerSideApply=true
+
+    # retry: retry sync if it fails (transient errors: API server unavailable, network blip).
+    retry:
+      limit: 5    # retry up to 5 times
+      backoff:
+        duration: 5s          # initial retry delay
+        factor: 2             # exponential backoff: 5s, 10s, 20s, 40s, 80s
+        maxDuration: 3m       # cap the retry delay at 3 minutes
+
+  # ─────────────────────────────────────────────────────────────────
+  # IGNORE DIFFERENCES
+  # Tell Argo CD to ignore certain fields when computing drift.
+  # Useful for fields that Kubernetes or other controllers update automatically.
+  # ─────────────────────────────────────────────────────────────────
+  ignoreDifferences:
+    # Ignore the replicas field in Deployments — HPA manages this.
+    # Without ignoreDifferences: Argo CD sees HPA changed replicas from 2 to 5
+    # and considers it drift → syncs back to 2 → fights with HPA.
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+
+    # Ignore webhook caBundle — automatically injected by cert-manager.
+    - group: admissionregistration.k8s.io
+      kind: MutatingWebhookConfiguration
+      jsonPointers:
+        - /webhooks/0/clientConfig/caBundle
+
+  # ─────────────────────────────────────────────────────────────────
+  # REVISION HISTORY LIMIT
+  # How many old deployments Argo CD remembers (for rollback).
+  # argocd app rollback employee-service-prod 3 → rollback to revision 3
+  # ─────────────────────────────────────────────────────────────────
+  revisionHistoryLimit: 10

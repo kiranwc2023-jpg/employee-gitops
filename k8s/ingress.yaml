@@ -1,0 +1,67 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+
+metadata:
+  name: employee-service
+  namespace: employee-prod
+  labels:
+    app.kubernetes.io/name: employee-service
+
+  # Annotations configure the specific nginx ingress controller behavior.
+  # These are NGINX-specific — different controllers use different annotations.
+  annotations:
+    # Use the nginx ingress controller to handle this ingress.
+    kubernetes.io/ingress.class: "nginx"
+
+    # Force HTTPS redirect: any HTTP request → 301 redirect to HTTPS.
+    # Without this: your API is accessible over unencrypted HTTP.
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+
+    # Preserve the original Host header from the client.
+    # Without this, the upstream (your pod) sees the Service hostname, not employee.company.com.
+    nginx.ingress.kubernetes.io/preserve-host: "true"
+
+    # Rate limiting: 60 requests per minute per client IP.
+    nginx.ingress.kubernetes.io/limit-rpm: "60"
+
+    # Max upload size (protects against large payload attacks).
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+
+    # Timeout for establishing a connection to the upstream pod.
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "10"
+
+    # Timeout for reading a response from the upstream pod.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+
+    # CORS (Cross-Origin Resource Sharing) — allow browsers from different domains.
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://employee-portal.company.com"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,X-CustomHeader,Keep-Alive,User-Agent,Authorization,Content-Type"
+
+spec:
+  ingressClassName: nginx
+
+  # tls: HTTPS termination at the ingress controller.
+  # The nginx controller reads the certificate from this Secret and handles TLS.
+  # Your Spring Boot app ONLY sees HTTP on port 8080 — no TLS configuration needed in the app.
+  tls:
+    - hosts:
+        - employee.company.com
+      # Kubernetes Secret containing the TLS certificate.
+      # Created by cert-manager (automatic Let's Encrypt) or manually.
+      # kubectl create secret tls employee-tls-secret --cert=tls.crt --key=tls.key -n employee-prod
+      secretName: employee-tls-secret
+
+  rules:
+    - host: employee.company.com
+      http:
+        paths:
+          # Route ALL paths to the employee-service.
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: employee-service      # the Service name in this namespace
+                port:
+                  number: 80               # the Service port (forwards to pod:8080)

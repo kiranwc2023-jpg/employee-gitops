@@ -1,0 +1,83 @@
+# ═══════════════════════════════════════════════════════════════════════
+# Chart.yaml — Helm Chart Metadata
+#
+# WHY HELM?
+#   Kubernetes YAML is static — you hardcode image tags, replica counts,
+#   resource limits. This means separate files for dev/staging/prod.
+#   Helm is a TEMPLATING ENGINE for Kubernetes:
+#     - One set of templates
+#     - Multiple values files (values-dev.yaml, values-prod.yaml)
+#     - Install/upgrade/rollback commands
+#   Helm makes Kubernetes deployments parametric and repeatable.
+#
+# Chart.yaml is REQUIRED by Helm — it cannot find the chart without it.
+# ═══════════════════════════════════════════════════════════════════════
+
+# apiVersion: v2 is required for Helm 3.
+# Helm 2 used apiVersion: v1. Helm 3 changed the format.
+# Without this: Helm 3 may treat the chart as a legacy Helm 2 chart.
+apiVersion: v2
+
+# name: the chart's name. Used in:
+#   helm install employee-service ./helm  → installs with this chart name
+#   helm upgrade employee-service ./helm  → upgrades existing release
+#   Release names, Kubernetes object names, and labels use this value.
+name: employee-service
+
+# description: shown in `helm search` results and `helm show chart`.
+# Helps other teams understand what this chart deploys.
+description: Enterprise Employee Microservice - Spring Boot REST API
+
+# type: application | library
+#   application: a deployable chart that creates Kubernetes objects (this chart)
+#   library: a chart of helper templates shared by other charts (not deployed directly)
+# Without this: Helm defaults to 'application'.
+type: application
+
+# version: the VERSION OF THE CHART ITSELF (not the app version).
+# These are independent:
+#   Chart version 1.0.0 might deploy app version 3.5.2
+#   You can update the chart (fix a typo in templates) without changing the app.
+# This follows Semantic Versioning.
+# Increment PATCH when you fix a chart template bug.
+# Increment MINOR when you add a new configurable parameter.
+# Increment MAJOR when the chart breaks backwards compatibility.
+version: 1.0.0
+
+# appVersion: the VERSION OF THE APPLICATION this chart deploys.
+# This is documentation only — Helm doesn't use it functionally.
+# The actual running version is controlled by values.yaml (image.tag).
+# Keeping them in sync is good practice but not enforced.
+appVersion: "1.0.0"
+
+# keywords: used by `helm search hub <keyword>` to find charts.
+# Not functionally significant for private charts.
+keywords:
+  - employee
+  - spring-boot
+  - java
+  - microservice
+  - rest-api
+
+# home: URL to the project's homepage. Documentation/informational only.
+home: https://github.com/mycompany/employee-service
+
+# sources: list of source code repositories. Documentation only.
+sources:
+  - https://github.com/mycompany/employee-service
+
+# maintainers: who is responsible for this chart.
+# Used by `helm show chart` for contact information.
+maintainers:
+  - name: Platform Engineering Team
+    email: platform@company.com
+
+# dependencies: other Helm charts this chart depends on.
+# Common example: your app chart depends on the PostgreSQL chart.
+# The dependency chart is downloaded and installed automatically.
+# Uncomment when adding a real database:
+# dependencies:
+#   - name: postgresql
+#     version: "12.x.x"
+#     repository: "https://charts.bitnami.com/bitnami"
+#     condition: postgresql.enabled

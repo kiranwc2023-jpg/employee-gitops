@@ -1,0 +1,60 @@
+# ═══════════════════════════════════════════════════════════════════════
+# configmap.yaml — Kubernetes ConfigMap
+#
+# WHY CONFIGMAP?
+#   Problem: Configuration embedded in the Docker image is immutable.
+#   To change config, you must rebuild the image — slow and wasteful.
+#
+#   ConfigMap: Store configuration OUTSIDE the image.
+#   Pods read configuration from ConfigMaps at startup (or via live reload).
+#   Change the ConfigMap → rolling restart picks up new config → no rebuild.
+#
+# CONFIGMAP vs SECRET:
+#   ConfigMap: non-sensitive data (URLs, usernames, feature flags, log levels)
+#   Secret:    sensitive data (passwords, API keys, TLS certificates)
+#
+# ConfigMap data is stored PLAINTEXT in etcd (Kubernetes database).
+# Never put passwords or API keys in a ConfigMap.
+# ═══════════════════════════════════════════════════════════════════════
+
+apiVersion: v1
+kind: ConfigMap
+
+metadata:
+  name: {{ include "employee-service.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "employee-service.labels" . | nindent 4 }}
+
+# data: the key-value pairs stored in the ConfigMap.
+# Keys become environment variable names (as configured in Deployment).
+# Values are plain strings (not encrypted).
+data:
+  # Database connection URL
+  # In a real production setup, this might be:
+  #   jdbc:postgresql://postgres-service:5432/employeedb?sslmode=require
+  # We use H2 here for demo. Production would point to PostgreSQL/RDS.
+  database-url: "jdbc:h2:mem:employeedb;DB_CLOSE_DELAY=-1"
+
+  # Database username — non-sensitive, safe in ConfigMap
+  database-username: "sa"
+
+  # Application-level configuration
+  # These map to Spring properties via env var naming convention:
+  # SPRING_JPA_SHOW_SQL → spring.jpa.show-sql
+  spring.jpa.show-sql: "false"
+  spring.jpa.properties.hibernate.format_sql: "false"
+  # Production: disable H2 console (security risk)
+  spring.h2.console.enabled: "false"
+
+  # Actuator configuration
+  management.endpoints.web.exposure.include: "health,info,metrics,prometheus"
+  management.endpoint.health.show-details: "always"
+
+  # Log level for production — INFO is appropriate, not DEBUG
+  logging.level.root: "INFO"
+  logging.level.com.company.employee: "INFO"
+
+  # Feature flags — application-level feature toggles
+  feature.salary-endpoint.enabled: "true"
+  feature.bulk-import.enabled: "false"

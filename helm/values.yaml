@@ -1,0 +1,299 @@
+# ═══════════════════════════════════════════════════════════════════════
+# values.yaml — Default Configuration Values for the Helm Chart
+#
+# WHY THIS FILE IS THE HEART OF GITOPS:
+#   Argo CD and the CI pipeline BOTH interact with this file.
+#   When CI builds a new Docker image version 1.2.3:
+#     1. CI pipeline uses sed/yq to change: tag: "1.2.2" → tag: "1.2.3"
+#     2. Commits and pushes the change to employee-gitops
+#     3. Argo CD detects the git change
+#     4. Argo CD re-renders the Helm templates with new values
+#     5. Argo CD applies the new Deployment to Kubernetes
+#     6. Kubernetes rolling-updates pods to use image 1.2.3
+#
+# This file is the SINGLE SOURCE OF TRUTH for what version runs in production.
+# Every deployment change is a git commit — full audit trail, rollback via git revert.
+# ═══════════════════════════════════════════════════════════════════════
+
+# ───────────────────────────────────────────────────────────────────────
+# REPLICA COUNT
+# How many pod replicas to run.
+# Production should be >= 2 for high availability (survive pod restarts).
+# ───────────────────────────────────────────────────────────────────────
+replicaCount: 2
+
+# ───────────────────────────────────────────────────────────────────────
+# IMAGE CONFIGURATION
+# This section is modified by the CI pipeline on every deployment.
+# ───────────────────────────────────────────────────────────────────────
+image:
+  # repository: the Docker registry path (without the tag)
+  # ghcr.io/mycompany/employee-service
+  #   ghcr.io = GitHub Container Registry
+  #   mycompany = GitHub organization or username
+  #   employee-service = image name
+  repository: ghcr.io/mycompany/employee-service
+
+  # pullPolicy controls when Kubernetes pulls the image from the registry:
+  #   Always:       Always pull — even if the image is cached on the node.
+  #                 Best for 'latest' tag (ensures you always run the newest).
+  #                 Slow: adds latency to every pod start.
+  #   IfNotPresent: Pull only if NOT cached on the node.
+  #                 Best for pinned semantic versions (e.g., "1.2.3").
+  #                 Since a version never changes, caching is safe.
+  #   Never:        Never pull — image MUST already be on the node.
+  #                 Only for air-gapped environments or pre-seeded nodes.
+  #
+  # Best practice for production: IfNotPresent with pinned semantic versions.
+  pullPolicy: IfNotPresent
+
+  # tag: THE FIELD THE CI PIPELINE UPDATES.
+  # This is a pinned semantic version string.
+  # NEVER use 'latest' in production:
+  #   - 'latest' is mutable — the same tag can refer to different images
+  #   - If a node restarts and pulls 'latest', it might get a broken new image
+  #   - Pinned versions are immutable — "1.2.3" always refers to the SAME image
+  tag: "1.0.0"
+
+# imagePullSecrets: required if your registry is private.
+# GHCR with a public repo: no secret needed.
+# GHCR with a private repo: requires a Kubernetes Secret with registry credentials.
+# The Secret is referenced by name here.
+imagePullSecrets:
+  - name: ghcr-pull-secret
+
+# ───────────────────────────────────────────────────────────────────────
+# SERVICE ACCOUNT
+# The Kubernetes ServiceAccount provides an identity to the pod.
+# Used for RBAC (Role-Based Access Control).
+# ───────────────────────────────────────────────────────────────────────
+serviceAccount:
+  # create: true → Helm creates a ServiceAccount for the pod
+  create: true
+  # automount: false → do NOT auto-mount the service account token into the pod
+  # Mounting it is a security risk if your app doesn't need to call the K8s API.
+  # If your app doesn't query the K8s API: always set false.
+  automountServiceAccountToken: false
+  # name: the ServiceAccount name. Empty string = use the Helm release name.
+  name: ""
+
+# ───────────────────────────────────────────────────────────────────────
+# POD ANNOTATIONS
+# Key-value metadata attached to pods.
+# Used by monitoring (Prometheus), service mesh (Istio), and log shippers.
+# ───────────────────────────────────────────────────────────────────────
+podAnnotations:
+  # Prometheus scraping configuration
+  # When Prometheus is installed with auto-discovery, it reads these annotations:
+  prometheus.io/scrape: "true"       # tells Prometheus to scrape this pod
+  prometheus.io/path: "/actuator/prometheus"   # the metrics endpoint path
+  prometheus.io/port: "8081"         # the port (management port, separate from API)
+
+# ───────────────────────────────────────────────────────────────────────
+# POD SECURITY CONTEXT
+# Security settings that apply to the ENTIRE pod (all containers).
+# These restrict what the pod can do at the OS level.
+# ───────────────────────────────────────────────────────────────────────
+podSecurityContext:
+  # runAsNonRoot: true → Kubernetes REJECTS the pod if the container tries to run as root (UID 0).
+  # This is a safety net in addition to the USER instruction in the Dockerfile.
+  runAsNonRoot: true
+  # runAsUser: 1001 → the UID the container runs as.
+  # Must match the UID of the user created in the Dockerfile (appuser).
+  runAsUser: 1001
+  # runAsGroup: 1001 → the GID the container runs as.
+  runAsGroup: 1001
+  # fsGroup: 1001 → files created in mounted volumes are owned by this GID.
+  # Without fsGroup, mounted volumes may be owned by root → application cannot write.
+  fsGroup: 1001
+
+# ───────────────────────────────────────────────────────────────────────
+# CONTAINER SECURITY CONTEXT
+# Security settings for the SPECIFIC container (overrides podSecurityContext if conflicting).
+# ───────────────────────────────────────────────────────────────────────
+securityContext:
+  # allowPrivilegeEscalation: false → the process cannot gain more privileges
+  # than its parent (e.g., cannot call setuid).
+  # Without this: a compromised app could escalate to root.
+  allowPrivilegeEscalation: false
+  # readOnlyRootFilesystem: true → the container's filesystem is read-only.
+  # If an attacker compromises the container, they cannot install malware.
+  # Your app must write to mounted volumes (e.g., /tmp) instead of the container filesystem.
+  readOnlyRootFilesystem: true
+  # capabilities.drop: ALL → remove ALL Linux capabilities.
+  # Linux capabilities (NET_ADMIN, SYS_ADMIN, etc.) allow privileged operations.
+  # A normal web application needs NONE of them.
+  # Dropping all is the minimal-privilege principle.
+  capabilities:
+    drop:
+      - ALL
+
+# ───────────────────────────────────────────────────────────────────────
+# SERVICE CONFIGURATION
+# How the application is exposed inside the Kubernetes cluster.
+# ───────────────────────────────────────────────────────────────────────
+service:
+  # type: ClusterIP = only accessible WITHIN the cluster (not from internet).
+  # Other options:
+  #   NodePort: exposed on a random port on EVERY node (dev/testing only)
+  #   LoadBalancer: provisions a cloud load balancer (expensive; use Ingress instead)
+  # Best practice for production: ClusterIP + Ingress controller for external access.
+  type: ClusterIP
+  # port: the port the Kubernetes Service listens on.
+  port: 80
+  # targetPort: the port YOUR APPLICATION listens on inside the pod (Dockerfile EXPOSE).
+  targetPort: 8080
+
+# ───────────────────────────────────────────────────────────────────────
+# INGRESS — External HTTP/HTTPS access to the service
+# ───────────────────────────────────────────────────────────────────────
+ingress:
+  # enabled: false → start without Ingress (deploy manually when DNS is configured).
+  # In production: set to true and configure host/tls.
+  enabled: true
+  # className: which Ingress controller handles this Ingress.
+  # "nginx" = the nginx-ingress-controller (most common).
+  # Other options: traefik, kong, istio
+  className: "nginx"
+  annotations:
+    # nginx-specific annotations that control routing behavior:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    # TLS/SSL termination: nginx handles SSL; your app receives plain HTTP.
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # Rate limiting: max 100 requests per minute per IP.
+    # Prevents abuse and DDoS at the application layer.
+    nginx.ingress.kubernetes.io/limit-rpm: "100"
+    # Request body size limit — prevent large payload attacks.
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+  hosts:
+    - host: employee.company.com    # your actual domain name
+      paths:
+        - path: /
+          # pathType: Prefix = match any path starting with "/"
+          # ImplementationSpecific = use Ingress controller's default behavior
+          pathType: Prefix
+  tls:
+    - secretName: employee-tls-secret    # Kubernetes Secret containing TLS cert/key
+      hosts:
+        - employee.company.com
+
+# ───────────────────────────────────────────────────────────────────────
+# RESOURCE REQUESTS AND LIMITS
+# REQUESTS: the minimum the pod needs (used for scheduling decisions)
+# LIMITS: the maximum the pod can use (enforced by cgroups)
+# ───────────────────────────────────────────────────────────────────────
+resources:
+  requests:
+    # CPU requests in "millicores". 250m = 0.25 cores.
+    # Kubernetes scheduler places the pod on a node with >= 250m CPU available.
+    # Spring Boot idle CPU: ~50m. Under load: 200-500m.
+    cpu: 250m
+    # Memory request: 256Mi (mebibytes).
+    # Spring Boot baseline heap + JVM overhead: ~150-200MB.
+    memory: 256Mi
+  limits:
+    # CPU limit: the pod cannot use more than 500m CPU.
+    # If it tries, the kernel throttles it (throttled, not killed).
+    cpu: 500m
+    # Memory limit: the pod cannot use more than 512Mi RAM.
+    # If it exceeds this, Kubernetes sends SIGKILL → OOMKilled.
+    # Set this HIGHER than the JVM heap (-XX:MaxRAMPercentage=75% of 512Mi = 384Mi heap).
+    # The remaining 128Mi covers JVM native memory, thread stacks, OS.
+    memory: 512Mi
+
+# ───────────────────────────────────────────────────────────────────────
+# HORIZONTAL POD AUTOSCALER (HPA)
+# Automatically scale replicas based on CPU/memory usage.
+# ───────────────────────────────────────────────────────────────────────
+autoscaling:
+  enabled: true
+  minReplicas: 2    # never scale below 2 (high availability)
+  maxReplicas: 10   # never scale above 10 (cost control)
+  # Scale UP when average CPU across all pods > 70%
+  targetCPUUtilizationPercentage: 70
+  # Scale UP when average memory > 80%
+  targetMemoryUtilizationPercentage: 80
+
+# ───────────────────────────────────────────────────────────────────────
+# HEALTH PROBES
+# Kubernetes uses these to determine if the pod is alive and ready.
+# ───────────────────────────────────────────────────────────────────────
+probes:
+  # livenessProbe: "is the application still running?"
+  # If this fails: Kubernetes RESTARTS the container.
+  # Use for: deadlocks, infinite loops — states where the app is frozen.
+  liveness:
+    path: /actuator/health/liveness
+    port: 8081                  # management port (not API port)
+    initialDelaySeconds: 60     # wait 60s after container start before first check
+                                # Spring Boot takes 30-45s to start — give it time.
+                                # If too short: pod restarts before app has started.
+    periodSeconds: 30           # check every 30 seconds
+    timeoutSeconds: 5           # probe must respond within 5 seconds
+    failureThreshold: 3         # 3 consecutive failures → restart container
+
+  # readinessProbe: "is the application ready to receive traffic?"
+  # If this fails: Kubernetes REMOVES the pod from Service load balancer.
+  # Traffic stops going to it; the pod stays running (not restarted).
+  # Use for: database connection not ready, warm-up processing in progress.
+  readiness:
+    path: /actuator/health/readiness
+    port: 8081
+    initialDelaySeconds: 30     # shorter than liveness — readiness can be checked sooner
+    periodSeconds: 10           # check more frequently (every 10s)
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+  # startupProbe: "has the application finished starting?"
+  # Protects slow-starting containers from being killed by liveness probe.
+  # Only active ONCE during startup. After success, liveness takes over.
+  startup:
+    path: /actuator/health
+    port: 8081
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    failureThreshold: 12        # 12 * 10s = 2 minutes to start before giving up
+
+# ───────────────────────────────────────────────────────────────────────
+# ENVIRONMENT VARIABLES
+# These are injected as env vars into the container at runtime.
+# They override application.properties (12-Factor App principle).
+# ───────────────────────────────────────────────────────────────────────
+env:
+  SPRING_PROFILES_ACTIVE: "prod"
+  JAVA_OPTS: "-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
+  # These come from ConfigMap and Secret (not hardcoded here):
+  # SPRING_DATASOURCE_URL      → from ConfigMap
+  # SPRING_DATASOURCE_USERNAME → from ConfigMap
+  # SPRING_DATASOURCE_PASSWORD → from Secret
+
+# ───────────────────────────────────────────────────────────────────────
+# NODE SELECTOR / TOLERATIONS / AFFINITY
+# Controls WHERE pods are scheduled in the cluster.
+# ───────────────────────────────────────────────────────────────────────
+nodeSelector: {}
+  # Example: schedule on nodes with label "workload=java-services"
+  # workload: java-services
+
+tolerations: []
+  # Example: tolerate tainted nodes (spot instances)
+  # - key: "spot-instance"
+  #   operator: "Equal"
+  #   value: "true"
+  #   effect: "NoSchedule"
+
+affinity:
+  # podAntiAffinity: spread pods across different nodes.
+  # Ensures that if a node fails, not ALL pods are lost.
+  # "soft" preference (preferredDuringScheduling) vs "hard" requirement (requiredDuringScheduling)
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - employee-service
+          topologyKey: kubernetes.io/hostname  # spread across different hostnames (nodes)
