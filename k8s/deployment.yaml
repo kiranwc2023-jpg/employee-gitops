@@ -9,7 +9,7 @@
 #   2. Plain manifests (./k8s/) — static YAML, specific lines updated by CI
 #
 # This file is the plain manifest approach.
-# The CI pipeline uses: sed -i "s|image:.*|image: ghcr.io/.../employee-service:1.2.3|" k8s/deployment.yaml
+# The CI pipeline uses: sed -i "s|image:.*|image: ghcr.io/kiranwc2023-jpg/employee-service:0.0.4
 # ═══════════════════════════════════════════════════════════════════════
 
 apiVersion: apps/v1
@@ -91,8 +91,8 @@ spec:
         - name: employee-service
           # !!!!! THIS LINE IS UPDATED BY THE CI PIPELINE !!!!!
           # The CI pipeline runs:
-          #   sed -i "s|image:.*employee-service:.*|image: ghcr.io/mycompany/employee-service:1.2.3|" k8s/deployment.yaml
-          image: ghcr.io/mycompany/employee-service:1.0.0
+          #   sed -i "s|image:.*employee-service:.*|image: ghcr.io/kiranwc2023-jpg/employee-service:0.0.4
+          image: ghcr.io/kiranwc2023-jpg/employee-service:0.0.4
 
           imagePullPolicy: IfNotPresent
 
