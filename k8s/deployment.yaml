@@ -1,53 +1,24 @@
-# ═══════════════════════════════════════════════════════════════════════
-# k8s/deployment.yaml — Plain Kubernetes Deployment (no Helm templating)
-#
-# This is the STATIC version — used by Argo CD when deploying without Helm.
-# The CI pipeline updates the image tag line directly with sed/yq.
-#
-# Argo CD supports two approaches:
-#   1. Helm chart (./helm/) — dynamic, templated, values.yaml updated by CI
-#   2. Plain manifests (./k8s/) — static YAML, specific lines updated by CI
-#
-# This file is the plain manifest approach.
-# The CI pipeline uses: sed -i "s|image:.*|image: ghcr.io/kiranwc2023-jpg/employee-service:0.0.6
-# ═══════════════════════════════════════════════════════════════════════
-
 apiVersion: apps/v1
 kind: Deployment
-
 metadata:
-  # name: the Kubernetes object name.
-  # 'employee-service' is the stable name — does not change between versions.
   name: employee-service
   namespace: employee-prod
-
-  # labels: metadata for organization and selection.
-  # These are NOT the pod selector labels — these label the Deployment object.
   labels:
     app.kubernetes.io/name: employee-service
     app.kubernetes.io/version: "1.0.0"
     app.kubernetes.io/component: backend
     app.kubernetes.io/part-of: employee-platform
     app.kubernetes.io/managed-by: argocd
-
 spec:
-  # replicas: 3 in production for high availability.
-  # 3 replicas survive: one node failure + one rolling update pod unavailable.
-  replicas: 3
-
-  # selector.matchLabels: which pods this Deployment manages.
-  # IMMUTABLE after initial creation — must delete+recreate Deployment to change.
+  replicas: 2
   selector:
     matchLabels:
       app.kubernetes.io/name: employee-service
-
-  # strategy.RollingUpdate: update pods gradually, zero downtime.
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxUnavailable: 0      # Never have fewer than 'replicas' running
-      maxSurge: 1            # Allow 1 extra pod during update
-
+      maxUnavailable: 0
+      maxSurge: 1
   template:
     metadata:
       labels:
@@ -57,53 +28,20 @@ spec:
         prometheus.io/scrape: "true"
         prometheus.io/path: "/actuator/prometheus"
         prometheus.io/port: "8081"
-
     spec:
-      # serviceAccountName: use a dedicated service account (not "default").
-      # The service account's RBAC role limits what this pod can do in the cluster.
       serviceAccountName: employee-service
-
-      # Security at pod level
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 1001
-        runAsGroup: 1001
-        fsGroup: 1001
-
-      # terminationGracePeriodSeconds: wait this long for graceful shutdown.
-      # SIGTERM → app starts graceful shutdown (drains in-flight requests).
-      # After 60s → SIGKILL (force kill).
-      # Must be > server.shutdown timeout (30s) to allow graceful completion.
       terminationGracePeriodSeconds: 60
-
-      # topologySpreadConstraints: spread pods evenly across availability zones.
-      # Ensures that a zone outage doesn't take down all pods.
-      # maxSkew: 1 → pods can differ by at most 1 between zones.
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: topology.kubernetes.io/zone
-          whenUnsatisfiable: DoNotSchedule    # Strict: fail pod if cannot spread
+          whenUnsatisfiable: ScheduleAnyway
           labelSelector:
             matchLabels:
               app.kubernetes.io/name: employee-service
-
       containers:
         - name: employee-service
-          # !!!!! THIS LINE IS UPDATED BY THE CI PIPELINE !!!!!
-          # The CI pipeline runs:
-          #   sed -i "s|image:.*employee-service:.*|image: ghcr.io/kiranwc2023-jpg/employee-service:0.0.6
           image: ghcr.io/kiranwc2023-jpg/employee-service:0.0.6
-
           imagePullPolicy: IfNotPresent
-
-          # Container-level security
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop:
-                - ALL
-
           ports:
             - name: http
               containerPort: 8080
@@ -111,158 +49,62 @@ spec:
             - name: management
               containerPort: 8081
               protocol: TCP
-
-          # ─────────────────────────────────────────────────────
-          # STARTUP PROBE: Give the app 2 minutes to start.
-          # While startupProbe is still pending, liveness/readiness are not checked.
-          # This prevents the liveness probe from killing a slow-starting JVM.
-          # ─────────────────────────────────────────────────────
           startupProbe:
             httpGet:
               path: /actuator/health
               port: 8081
-            initialDelaySeconds: 10
+            initialDelaySeconds: 15
             periodSeconds: 10
-            failureThreshold: 12    # 12 * 10s = 120 seconds before giving up
-
-          # ─────────────────────────────────────────────────────
-          # LIVENESS PROBE: "Is the app frozen/deadlocked?"
-          # Failure → restart the container.
-          # ─────────────────────────────────────────────────────
+            failureThreshold: 18
           livenessProbe:
             httpGet:
               path: /actuator/health/liveness
               port: 8081
-            initialDelaySeconds: 60
+            initialDelaySeconds: 0
             periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 3
-            successThreshold: 1
-
-          # ─────────────────────────────────────────────────────
-          # READINESS PROBE: "Is the app ready for traffic?"
-          # Failure → remove from Service endpoints (no traffic).
-          # ─────────────────────────────────────────────────────
           readinessProbe:
             httpGet:
               path: /actuator/health/readiness
               port: 8081
-            initialDelaySeconds: 30
+            initialDelaySeconds: 0
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
-            successThreshold: 1
-
           env:
-            # ─────────────────────────────────────────────────
-            # configMapKeyRef: read from ConfigMap (non-secret config)
-            # ─────────────────────────────────────────────────
             - name: SPRING_DATASOURCE_URL
               valueFrom:
                 configMapKeyRef:
                   name: employee-service-config
                   key: database-url
-
             - name: SPRING_DATASOURCE_USERNAME
               valueFrom:
                 configMapKeyRef:
                   name: employee-service-config
                   key: database-username
-
-            # ─────────────────────────────────────────────────
-            # secretKeyRef: read from Secret (sensitive config)
-            # The password is NOT embedded in this YAML.
-            # It is injected at runtime from the Kubernetes Secret.
-            # Even if this YAML is committed to Git, no password is exposed.
-            # ─────────────────────────────────────────────────
             - name: SPRING_DATASOURCE_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: employee-service-secret
                   key: database-password
-
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms64m -Xmx256m -XX:+UseContainerSupport"
             - name: SPRING_PROFILES_ACTIVE
               value: "prod"
-
-            # Downward API: expose pod's own metadata as env vars.
-            # Your app can log: "Running as pod employee-service-6d9c4b5 in namespace employee-prod"
-            - name: POD_NAME
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.name
-
-            - name: POD_NAMESPACE
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.namespace
-
-            - name: POD_IP
-              valueFrom:
-                fieldRef:
-                  fieldPath: status.podIP
-
-            # NODE_NAME: useful for affinity debugging and node-level metrics
-            - name: NODE_NAME
-              valueFrom:
-                fieldRef:
-                  fieldPath: spec.nodeName
-
-          # RESOURCE REQUESTS AND LIMITS
           resources:
             requests:
-              # 250m CPU = 0.25 cores. JVM idle uses ~50m.
-              # Request 250m to ensure the pod gets scheduled on a node with capacity.
-              cpu: 250m
-              # 256Mi memory. JVM startup needs ~100MB; under load ~200MB.
+              cpu: 100m
               memory: 256Mi
             limits:
-              # 500m CPU = 0.5 cores. CPU limit throttles (not kills).
               cpu: 500m
-              # 512Mi = hard limit. Exceeding this → OOMKilled (container restart).
-              # -XX:MaxRAMPercentage=75 → JVM heap = 384Mi.
-              # OS + JVM native = 128Mi. Total <= 512Mi.
               memory: 512Mi
-
           volumeMounts:
-            # /tmp must be writable — Spring Boot writes temp files here.
-            # readOnlyRootFilesystem: true requires explicit writable mounts.
             - name: tmp-volume
               mountPath: /tmp
-            # /app/logs if your app writes log files
-            # - name: log-volume
-            #   mountPath: /app/logs
-
-      volumes:
-        # emptyDir: temporary scratch space. Lives only while the pod lives.
-        - name: tmp-volume
-          emptyDir:
-            # medium: "Memory" stores the volume in RAM (tmpfs) instead of disk.
-            # Faster writes, but counts against the pod's memory limit.
-            # Use "" for disk-backed (default, slower but doesn't eat RAM limit).
-            medium: ""
-            # sizeLimit: max size of this emptyDir volume.
-            sizeLimit: 100Mi
-
-      # imagePullSecrets: credentials for the private GHCR registry.
-      # The Secret must be created in the 'employee-prod' namespace separately:
-      #   kubectl create secret docker-registry ghcr-pull-secret \
-      #     --docker-server=ghcr.io \
-      #     --docker-username=<github-username> \
-      #     --docker-password=<github-pat> \
-      #     --namespace=employee-prod
       imagePullSecrets:
         - name: ghcr-pull-secret
-
-      # affinity: schedule pods to spread across nodes (anti-affinity).
-      affinity:
-        podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              podAffinityTerm:
-                labelSelector:
-                  matchExpressions:
-                    - key: app.kubernetes.io/name
-                      operator: In
-                      values:
-                        - employee-service
-                topologyKey: kubernetes.io/hostname
+      volumes:
+        - name: tmp-volume
+          emptyDir:
+            sizeLimit: 100Mi
