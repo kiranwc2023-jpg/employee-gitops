@@ -1,30 +1,23 @@
 apiVersion: v1
 kind: Service
-
 metadata:
   name: employee-service
   namespace: employee-prod
   labels:
     app.kubernetes.io/name: employee-service
     app.kubernetes.io/component: backend
-
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "classic"
 spec:
-  type: ClusterIP
-
+  type: LoadBalancer
   selector:
-    # MUST match the pod template's labels in deployment.yaml.
-    # The Service continuously watches pod labels.
-    # When a pod with these labels appears: it is added to the endpoint list.
-    # When a pod with these labels dies: it is removed from the endpoint list.
-    # This happens AUTOMATICALLY — no manual configuration of pod IPs.
     app.kubernetes.io/name: employee-service
-
   ports:
     - name: http
-      port: 80              # Port clients use to reach the Service
-      targetPort: 8080      # Port the container listens on
+      port: 80
+      targetPort: 8080
       protocol: TCP
     - name: management
-      port: 8081            # Management port (actuator endpoints)
+      port: 8081
       targetPort: 8081
       protocol: TCP
