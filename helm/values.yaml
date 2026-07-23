@@ -4,7 +4,7 @@
 # WHY THIS FILE IS THE HEART OF GITOPS:
 #   Argo CD and the CI pipeline BOTH interact with this file.
 #   When CI builds a new Docker image version 1.2.3:
-#     1. CI pipeline uses sed/yq to change: tag: "0.0.5" → tag: "1.2.3"
+#     1. CI pipeline uses sed/yq to change: tag: "0.0.6" → tag: "1.2.3"
 #     2. Commits and pushes the change to employee-gitops
 #     3. Argo CD detects the git change
 #     4. Argo CD re-renders the Helm templates with new values
@@ -53,7 +53,7 @@ image:
   #   - 'latest' is mutable — the same tag can refer to different images
   #   - If a node restarts and pulls 'latest', it might get a broken new image
   #   - Pinned versions are immutable — "1.2.3" always refers to the SAME image
-  tag: "0.0.5"
+  tag: "0.0.6"
 
 # imagePullSecrets: required if your registry is private.
 # GHCR with a public repo: no secret needed.
