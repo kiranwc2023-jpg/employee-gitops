@@ -30,21 +30,18 @@ metadata:
 # Keys become environment variable names (as configured in Deployment).
 # Values are plain strings (not encrypted).
 data:
-  # Database connection URL
-  # In a real production setup, this might be:
-  #   jdbc:postgresql://postgres-service:5432/employeedb?sslmode=require
-  # We use H2 here for demo. Production would point to PostgreSQL/RDS.
-  database-url: "jdbc:h2:mem:employeedb;DB_CLOSE_DELAY=-1"
+  # AWS RDS PostgreSQL connection URL.
+  # Replace <RDS_ENDPOINT> with the actual endpoint after creating the RDS instance:
+  #   aws rds describe-db-instances --db-instance-identifier employee-db \
+  #     --query 'DBInstances[0].Endpoint.Address' --output text
+  database-url: "jdbc:postgresql://<RDS_ENDPOINT>:5432/employeedb"
 
   # Database username — non-sensitive, safe in ConfigMap
-  database-username: "sa"
+  database-username: "employeeuser"
 
   # Application-level configuration
-  # These map to Spring properties via env var naming convention:
-  # SPRING_JPA_SHOW_SQL → spring.jpa.show-sql
   spring.jpa.show-sql: "false"
   spring.jpa.properties.hibernate.format_sql: "false"
-  # Production: disable H2 console (security risk)
   spring.h2.console.enabled: "false"
 
   # Actuator configuration
