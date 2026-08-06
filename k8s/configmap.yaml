@@ -11,9 +11,8 @@ metadata:
 # These values are injected as environment variables into the pod
 # via the Deployment's env.valueFrom.configMapKeyRef entries.
 data:
-  # Replace <RDS_ENDPOINT> with the actual RDS hostname after instance creation.
-  database-url: "jdbc:postgresql://<RDS_ENDPOINT>:5432/employeedb"
-  database-username: "employeeuser"
+  database-url: "jdbc:h2:mem:employeedb;DB_CLOSE_DELAY=-1"
+  database-username: "sa"
 
   spring.jpa.show-sql: "false"
   spring.h2.console.enabled: "false"
