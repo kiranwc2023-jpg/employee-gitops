@@ -92,10 +92,6 @@ spec:
               value: "-Xms64m -Xmx256m -XX:+UseContainerSupport"
             - name: SPRING_PROFILES_ACTIVE
               value: "prod"
-            - name: SPRING_DATASOURCE_DRIVER_CLASS_NAME
-              value: "org.h2.Driver"
-            - name: SPRING_JPA_DATABASE_PLATFORM
-              value: "org.hibernate.dialect.H2Dialect"
           resources:
             requests:
               cpu: 100m
