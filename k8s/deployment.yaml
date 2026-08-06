@@ -10,7 +10,7 @@ metadata:
     app.kubernetes.io/part-of: employee-platform
     app.kubernetes.io/managed-by: argocd
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: employee-service
@@ -18,7 +18,7 @@ spec:
     type: RollingUpdate
     rollingUpdate:
       maxUnavailable: 1
-      maxSurge: 1
+      maxSurge: 0
   template:
     metadata:
       labels:
